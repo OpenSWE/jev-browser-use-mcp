@@ -28,8 +28,9 @@ def main() -> int:
 
     if body.get("session_id"):
         print("\n-- follow-up goal on the same tab --", file=sys.stderr)
-        follow = RUNNER.run_task(None, "open the section about her notes on the Analytical Engine",
-                                 body["session_id"], 50)
+        follow = RUNNER.run_task(
+            None, "open the section about her notes on the Analytical Engine", body["session_id"], 50
+        )
         print(json.dumps({k: follow.get(k) for k in ("outcome", "url", "steps", "task_ms")}, indent=2))
         RUNNER.close_session(body["session_id"])
 
