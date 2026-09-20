@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from jev_browser_use_mcp import server, sessions
+from jev_browser_use_mcp import chrome, server, sessions
 from jev_browser_use_mcp.sessions import STATE_KEYS, ContractDrift, SessionStore, assert_state_contract, retask
 
 
@@ -375,10 +375,16 @@ def test_importing_the_server_does_not_bind_a_daemon_name():
 # ---- orphan tab sweeping -------------------------------------------------
 
 
+def refuse(*_a, **_k):
+    raise ConnectionRefusedError(61, "daemon gone")
+
+
 @pytest.fixture
 def orphan(tmp_path, monkeypatch):
-    monkeypatch.setattr(sessions, "CACHE", tmp_path)
-    monkeypatch.setattr(sessions, "pid_alive", lambda pid: False)
+    """An attached-mode leftover: a tab record, and no chrome.pid because we own no browser."""
+    for module in (sessions, chrome):
+        monkeypatch.setattr(module, "CACHE", tmp_path)
+        monkeypatch.setattr(module, "pid_alive", lambda pid: False)
     dead = tmp_path / "99999"
     dead.mkdir()
     (dead / "targets.json").write_text('["T1", "T2"]')
@@ -388,14 +394,37 @@ def orphan(tmp_path, monkeypatch):
 def test_sweep_closes_orphan_tabs_and_clears_the_record(orphan):
     assert sessions.sweep_orphan_tabs(lambda *a, **k: {}) == 2
     assert not orphan.exists()
+    chrome.sweep_orphans()
+    assert not orphan.parent.exists(), "an empty record dir is reclaimable"
 
 
-def test_sweep_keeps_the_record_when_a_close_fails(orphan):
-    """The file is the only thing that can ever close those tabs; a failed sweep must not strand them."""
+def test_sweep_keeps_the_record_across_the_whole_startup_path(orphan):
+    """main() runs sweep_orphan_tabs() then sweep_orphans(); the record must survive both.
 
-    def refuse(*_a, **_k):
-        raise ConnectionRefusedError(61, "daemon gone")
-
+    Testing sweep_orphan_tabs() alone hides the bug, because the deletion lives in the
+    order main() calls two functions, not inside either one.
+    """
     assert sessions.sweep_orphan_tabs(refuse) == 0
+    assert orphan.exists()
+    assert chrome.sweep_orphans() == 0, "a dir holding an unreaped tab record is not an orphan"
+    assert orphan.exists(), "rmtree would strand those tabs in the user's Chrome forever"
     assert orphan.exists(), "deleting the record after a failed sweep strands tabs in the user's Chrome"
     assert sessions.sweep_orphan_tabs(lambda *a, **k: {}) == 2, "a later run must be able to retry"
+
+
+def test_headless_leftovers_are_still_fully_reclaimed(orphan):
+    """The gate keys on chrome.pid, not on mode -- a headless dir must not leak a profile."""
+    headless = orphan.parent.parent / "88888"
+    headless.mkdir()
+    (headless / "chrome.pid").write_text("77777")  # pid_alive is stubbed False
+    corrupt = orphan.parent.parent / "77766"
+    corrupt.mkdir()
+    (corrupt / "chrome.pid").write_text("not-a-pid")
+    (corrupt / "targets.json").write_text("[]")
+    (headless / "targets.json").write_text('["T9"]')
+    (headless / "Default").mkdir()
+
+    assert sessions.sweep_orphan_tabs(refuse) == 0
+    assert chrome.sweep_orphans() == 2, "their Chrome is dead, so their tabs are too"
+    assert not headless.exists() and not corrupt.exists(), "a corrupt chrome.pid is still headless garbage"
+    assert orphan.exists(), "the attached record is untouched"

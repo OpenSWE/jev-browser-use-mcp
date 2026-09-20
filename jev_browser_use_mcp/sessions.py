@@ -114,9 +114,13 @@ def close_quietly(agent) -> None:
 class TabRegistry:
     """Records the tabs we create so a hard-killed server's tabs can still be reaped.
 
-    Only meaningful in attached mode: there the browser outlives us and our
-    background tabs would otherwise accumulate invisibly in the user's Chrome
-    forever. Headless mode kills the whole browser, which takes its tabs with it.
+    Written in both modes, but only ever READ in attached mode: there the browser
+    outlives us and our background tabs would otherwise accumulate invisibly in the
+    user's Chrome forever. Headless mode kills the whole browser, which takes its
+    tabs with it, and the file is reclaimed along with the profile directory.
+
+    Keeping the write unconditional is what lets chrome.sweep_orphans() tell the two
+    apart by the presence of chrome.pid alone, with no mode branch.
     """
 
     def __init__(self) -> None:

@@ -100,6 +100,16 @@ def sweep_orphans() -> int:
                 os.kill(chrome_pid, signal.SIGTERM)
             except OSError:
                 pass
+        # Gate on the file existing, not on the parsed pid: a corrupt chrome.pid also
+        # reads as 0, and that dir IS headless garbage we should reclaim.
+        if not (entry / "chrome.pid").exists() and (entry / "targets.json").exists():
+            # Attached mode: no profile to reclaim, and this record is the only thing
+            # that can still close those tabs in the user's real Chrome. Deleting it
+            # here would undo sweep_orphan_tabs()'s deliberate decision to keep it
+            # after a failed close. It removes the file itself once every close lands.
+            # ponytail: these dirs accumulate if the daemon never comes back -- cap by
+            # age if that ever shows up.
+            continue
         shutil.rmtree(entry, ignore_errors=True)
         removed += 1
     return removed
