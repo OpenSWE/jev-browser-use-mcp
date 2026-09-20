@@ -67,7 +67,7 @@ def _extra_flags() -> list[str]:
     return []
 
 
-def _alive(pid: int) -> bool:
+def pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
     except (ProcessLookupError, ValueError):
@@ -89,13 +89,13 @@ def sweep_orphans() -> int:
     for entry in CACHE.iterdir():
         if not entry.is_dir() or not entry.name.isdigit():
             continue
-        if _alive(int(entry.name)):
+        if pid_alive(int(entry.name)):
             continue
         try:
             chrome_pid = int((entry / "chrome.pid").read_text().strip())
         except (OSError, ValueError):
             chrome_pid = 0
-        if chrome_pid and _alive(chrome_pid):
+        if chrome_pid and pid_alive(chrome_pid):
             try:
                 os.kill(chrome_pid, signal.SIGTERM)
             except OSError:
@@ -119,6 +119,9 @@ class HeadlessChrome:
             return self.cdp_url
         binary = find_chrome()
         port = _free_port()
+        # PIDs are reused, so a directory with our number may be a dead run's leftovers
+        # that the sweep skipped as "live". Never start Chrome on an inherited profile.
+        shutil.rmtree(self.profile, ignore_errors=True)
         self.profile.mkdir(parents=True, exist_ok=True)
         argv = [
             binary,

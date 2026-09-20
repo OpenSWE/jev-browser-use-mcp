@@ -16,7 +16,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .chrome import CACHE, _alive
+from .chrome import CACHE, pid_alive
 
 MAX_SESSIONS = 3
 IDLE_TTL_S = 300.0
@@ -164,19 +164,25 @@ def sweep_orphan_tabs(cdp) -> int:
     if not CACHE.is_dir():
         return 0
     for entry in CACHE.iterdir():
-        if not entry.is_dir() or not entry.name.isdigit() or _alive(int(entry.name)):
+        if not entry.is_dir() or not entry.name.isdigit() or pid_alive(int(entry.name)):
             continue
         targets = entry / "targets.json"
         try:
             ids = json.loads(targets.read_text())
         except (OSError, json.JSONDecodeError):
             continue
+        failed = False
         for target_id in ids:
             try:
                 cdp("Target.closeTarget", targetId=target_id)
                 closed += 1
             except Exception:
-                pass  # Tab, browser or daemon already gone. Nothing to reap.
+                failed = True  # Tab already gone, or the daemon is unreachable. Cannot tell which.
+        if failed:
+            # Keep the record: this file is the only thing that can ever close those
+            # tabs, and deleting it after a failed sweep strands them in the user's
+            # Chrome forever. A later run retries; closing a dead tab is harmless.
+            continue
         try:
             targets.unlink(missing_ok=True)
         except OSError:

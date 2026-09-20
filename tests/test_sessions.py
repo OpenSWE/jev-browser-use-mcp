@@ -188,12 +188,28 @@ def test_same_session_concurrent_call_is_busy(runner):
 # ---- envelope ------------------------------------------------------------
 
 
-def test_envelope_never_leaks_internals(runner):
+def test_envelope_never_leaks_internals(runner, monkeypatch):
+    """SECRET is planted in every field the design says must be stripped."""
+    page = {
+        "url": "https://e.test",
+        "title": "T",
+        "text": "hello",
+        "screenshot": "SECRET-shot",
+        "guards": "SECRET-guards",
+        "marker": "SECRET-marker",
+    }
+    agent = FakeAgent(
+        page=page,
+        decision={"request": "SECRET-req", "raw_answers": "SECRET-raw"},
+        decisions=[{"request": "SECRET-req2", "raw_answers": "SECRET-raw2"}],
+    )
+    monkeypatch.setattr(runner, "build_session", lambda url, goal: runner.store.add(agent, goal))
     body = runner.run_task("https://e.test", "a", None, 50)
-    blob = repr(body)
-    assert "SECRET" not in blob, "decision.request, raw_answers and screenshots must be stripped"
+
+    assert "SECRET" not in repr(body), "the envelope is a whitelist; nothing internal may ride along"
+    assert 99.0 not in body.values(), "started_at is a raw perf_counter float, meaningless as JSON"
     assert body["verified"] is False
-    assert "done" not in {body["outcome"]}, "the bare word 'done' must never be an outcome value"
+    assert body["outcome"] != "done", "the bare word 'done' must never be an outcome value"
     assert body["outcome"] == "agent_claims_done"
     assert "page_text_untrusted" in body and "text" not in body
 
@@ -216,12 +232,22 @@ def test_deadline_returns_evidence_and_stays_resumable(runner, monkeypatch):
     assert runner.store.get(body["session_id"]) is not None
 
 
-def test_blocked_is_not_resumable_and_is_dropped(runner, monkeypatch):
+def test_blocked_stays_resumable_for_a_new_goal(runner, monkeypatch):
+    """jev bricks a blocked Agent permanently, but retask() revives it for a NEW goal."""
     monkeypatch.setattr(runner, "build_session", lambda url, goal: runner.store.add(FakeAgent(end="blocked"), goal))
     body = runner.run_task("https://e.test", "a", None, 50)
     assert body["outcome"] == "blocked"
-    # jev bricks a blocked Agent permanently, but retask() revives it for a NEW goal.
-    assert body["resumable"] is True
+    assert body["resumable"] is True and runner.store.get(body["session_id"]) is not None
+
+
+def test_unresumable_outcomes_drop_the_session(runner, monkeypatch):
+    agent = FakeAgent(raises=RuntimeError("Dropdown execution was not confirmed; inspect before retrying."))
+    monkeypatch.setattr(runner, "build_session", lambda url, goal: runner.store.add(agent, goal))
+    body = runner.run_task("https://e.test", "a", None, 50)
+    assert body["outcome"] == "ambiguous_mutation"
+    assert body["resumable"] is False and body["session_id"] is None
+    assert len(runner.store) == 0, "an ambiguous session must not be offered for reuse"
+    assert "NOT retried" in body["warning"]
 
 
 def test_setup_failure_passes_the_message_through(runner, monkeypatch):
@@ -301,3 +327,75 @@ def test_model_failure_is_retried_and_can_succeed(runner, monkeypatch):
     monkeypatch.setattr(runner, "build_session", lambda url, goal: runner.store.add(agent, goal))
     body = runner.run_task("https://e.test", "a", None, 50)
     assert body["outcome"] == "agent_claims_done" and calls["n"] == 3
+
+
+# ---- MCP wiring ----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "mode, names",
+    [
+        ("headless", ["close_browser_session", "run_browser_task"]),
+        ("attached", ["close_browser_session_as_me", "run_browser_task_as_me"]),
+    ],
+)
+def test_build_server_registers_tools(monkeypatch, mode, names):
+    """The one surface no other test touches: a wrong kwarg here is a crash on startup."""
+    import asyncio
+    import importlib
+
+    monkeypatch.setenv("JEV_MCP_BROWSER", mode)
+    module = importlib.reload(server)
+    try:
+        tools = asyncio.run(module.build_server().list_tools())
+        assert sorted(t.name for t in tools) == names
+        run_tool = next(t for t in tools if t.name.startswith("run_browser_task"))
+        assert sorted(run_tool.input_schema["properties"]) == ["goal", "session_id", "timeout_s", "url"]
+        assert ("YOUR REAL LOGGED-IN CHROME" in run_tool.description) is (mode == "attached")
+        assert "not for fetching public content" in run_tool.description.lower()
+    finally:
+        monkeypatch.delenv("JEV_MCP_BROWSER", raising=False)
+        importlib.reload(server)
+
+
+def test_importing_the_server_does_not_bind_a_daemon_name():
+    """browser_harness freezes NAME/SOCK at import, so importing it early pins "default".
+
+    main() must set BU_NAME before anything pulls browser_harness in; importing this
+    package must not pull it in at all.
+    """
+    import subprocess
+    import sys as _sys
+
+    code = "import sys, jev_browser_use_mcp.server; print('browser_harness' in sys.modules)"
+    out = subprocess.run([_sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == "False", "importing the server must not freeze browser_harness's daemon name"
+
+
+# ---- orphan tab sweeping -------------------------------------------------
+
+
+@pytest.fixture
+def orphan(tmp_path, monkeypatch):
+    monkeypatch.setattr(sessions, "CACHE", tmp_path)
+    monkeypatch.setattr(sessions, "pid_alive", lambda pid: False)
+    dead = tmp_path / "99999"
+    dead.mkdir()
+    (dead / "targets.json").write_text('["T1", "T2"]')
+    return dead / "targets.json"
+
+
+def test_sweep_closes_orphan_tabs_and_clears_the_record(orphan):
+    assert sessions.sweep_orphan_tabs(lambda *a, **k: {}) == 2
+    assert not orphan.exists()
+
+
+def test_sweep_keeps_the_record_when_a_close_fails(orphan):
+    """The file is the only thing that can ever close those tabs; a failed sweep must not strand them."""
+
+    def refuse(*_a, **_k):
+        raise ConnectionRefusedError(61, "daemon gone")
+
+    assert sessions.sweep_orphan_tabs(refuse) == 0
+    assert orphan.exists(), "deleting the record after a failed sweep strands tabs in the user's Chrome"
+    assert sessions.sweep_orphan_tabs(lambda *a, **k: {}) == 2, "a later run must be able to retry"

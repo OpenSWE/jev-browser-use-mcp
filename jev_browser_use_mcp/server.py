@@ -26,6 +26,9 @@ SETUP_TIMEOUT_S = 30.0
 DEFAULT_TASK_TIMEOUT_S = 50
 MAX_TASK_TIMEOUT_S = 600
 TEXT_CAP = 2000
+# CONSECUTIVE, not per-run: a successful tick resets the counter, so a flaky endpoint
+# keeps being retried and the task deadline is what ultimately bounds it. That is the
+# intent -- a transient 500 mid-task should not abort work already done.
 MODEL_RETRIES = 2
 
 # Config the user must set: the last two silently fall back to DeepSeek, which
@@ -257,7 +260,7 @@ class Runner:
 
     # ---- entry points --------------------------------------------------
 
-    def run_task(self, url, goal, session_id, timeout_s) -> dict:
+    def run_task(self, url, goal, session_id, timeout_s, stop: threading.Event | None = None) -> dict:
         started = time.monotonic()
         if (url is None) == (session_id is None):
             raise ValueError("pass exactly one of `url` (start) or `session_id` (continue)")
@@ -290,8 +293,7 @@ class Runner:
 
             setup_ms = int((time.monotonic() - started) * 1000)
             task_started = time.monotonic()
-            stop = threading.Event()
-            outcome = self.drive(session, task_started + timeout_s, stop)
+            outcome = self.drive(session, task_started + timeout_s, stop or threading.Event())
             task_ms = int((time.monotonic() - task_started) * 1000)
             body = self.envelope(session, outcome, setup_ms, task_ms)
             if not body["resumable"]:
@@ -345,7 +347,15 @@ def build_server() -> MCPServer:
         session_id: str | None = None,
         timeout_s: int = DEFAULT_TASK_TIMEOUT_S,
     ) -> dict:
-        return await asyncio.to_thread(RUNNER.run_task, url, goal, session_id, timeout_s)
+        # to_thread cannot kill the worker, and a tick must never be cut mid-mutation.
+        # Cancellation therefore uses the same flag as the deadline: stop at the next
+        # tick boundary, which is the only safe place to stop.
+        stop = threading.Event()
+        try:
+            return await asyncio.to_thread(RUNNER.run_task, url, goal, session_id, timeout_s, stop)
+        except asyncio.CancelledError:
+            stop.set()
+            raise
 
     @server.tool(
         name=f"close_browser_session{suffix}",
@@ -357,14 +367,32 @@ def build_server() -> MCPServer:
     return server
 
 
-def main() -> None:
-    check_env()
+def sweep_attached_tabs() -> int:
+    """Close background tabs a hard-killed server left in the user's Chrome.
+
+    Attached mode only, and only once BU_NAME is already in the environment:
+    importing browser_harness.helpers freezes its daemon name for the whole
+    process. In headless mode this would be meaningless anyway -- old tabs belong
+    to a dead jev-h<port> Chrome that sweep_orphans() has already killed.
+    """
     try:
         from browser_harness.helpers import cdp
 
-        sessions.sweep_orphan_tabs(cdp)  # Must run before sweep_orphans removes the directories.
+        return sessions.sweep_orphan_tabs(cdp)
     except Exception:
-        pass
+        return 0
+
+
+def main() -> None:
+    check_env()
+    # BU_NAME must be set before ANYTHING imports browser_harness: helpers.py:38-39
+    # and admin.py:128 bind NAME and SOCK at import time and never rebind. Importing
+    # helpers here to sweep tabs would freeze it to "default" and leave admin managing
+    # one daemon while every cdp() call talked to another.
+    if attached_mode():
+        os.environ.setdefault("BU_NAME", "jev-chrome")
+        sweep_attached_tabs()  # Must precede sweep_orphans(), which removes the directories.
+    os.environ.setdefault("BH_UPDATE_CHECK", "0")
     chrome.sweep_orphans()
     sessions.start_reaper(RUNNER.store)
     import atexit
