@@ -20,8 +20,16 @@ jev-browser-use-mcp = "jev_browser_use_mcp.server:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# jev-ultrafast is a git URL (not on PyPI). This is also why this package cannot
+# itself be published to PyPI: PyPI rejects any dist with a direct reference.
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [dependency-groups]
-dev = ["pytest>=8.4,<9", "ruff>=0.14,<1"]
+dev = [
+    "pytest>=8.4,<9",
+    "ruff>=0.14,<1",
+]
 
 [tool.ruff]
 line-length = 120
