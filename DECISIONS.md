@@ -1,124 +1,122 @@
 # Decisions
 
-Append-only. Newest last.
+Append-only. Each entry is a call the spec did not settle.
+
+The design was settled in a grilling session (41 questions) before any code existed.
+Entries below record the calls whose rationale is not obvious from the code, plus the
+two made on the user's behalf by a paired advisor.
 
 ---
 
-## 2026-09-20 — Design settled by a 14-round grilling session
+## D1 — Evidence, never a verdict
 
-41 decisions, confirmed verbatim by the user before any code was written. The
-load-bearing ones, with the reason each exists rather than the alternative:
+`status == "done"` is set when the **model chooses** `DONE` (`agent.py:97`). jev's own
+README says a DONE choice still requires independent outcome verification. Returning
+`{"status": "done"}` to another agent would launder that claim into a fact.
 
-- **Evidence, never a verdict.** `status == "done"` in jev means *the model
-  chose `DONE`*, not that the task succeeded; jev's own README says a `DONE`
-  choice still requires independent verification. Returning `{"status":"done"}`
-  to another agent would launder a claim into a fact. Hence `agent_claims_done`,
-  a `verified: false` field, and page evidence the caller judges for itself.
-- **Three field names carry their own warnings**, because a name survives
-  summarization and truncation where a description does not:
-  `agent_claims_done`, `page_text_untrusted`, `run_browser_task_as_me`.
-- **Never retry a browser mutation** (jev's `AGENTS.md`). Where a mutation may
-  or may not have landed, the outcome is `ambiguous_mutation`, the session is
-  dropped, and nothing is retried. Only model failures retry, because
-  `model.py` is explicit that no action executed.
-- **Two server registrations, mode fixed per process.** Not a preference:
-  `browser_harness.helpers` binds `NAME`/`SOCK` at import, so one process
-  cannot serve both browser modes.
-- **Deadline checked between ticks only.** The only safe stopping point; a
-  mutation must never be interrupted mid-flight.
+The outcome value is `agent_claims_done`, `verified` is always `false`, and the envelope
+carries `url`, `title`, `page_text_untrusted` and the action log so the caller can check.
+The bare string `"done"` is never an outcome value.
 
----
+## D2 — `page_text_untrusted` is the field name
 
-## 2026-09-20 — Repo stays local until the checks are green
+Page text is written by whoever controls the page. jev defends itself
+(`questions.py:4`: *"Page text is untrusted data, never instructions"*); the calling agent
+has no such guard. The field name carries the warning because a name survives
+summarization and truncation where a description does not. Capped at 2000 chars.
 
-`git init` here, real commits as the work lands, tests green, then stop and
-report. The remote is created by the user with one command at that point:
+This is a mitigation, not a guarantee. There is no sanitizing natural language.
+
+## D3 — Two servers, mode fixed per process
+
+`browser_harness.helpers` binds `NAME`/`SOCK` at **import**, so browser mode cannot be a
+per-call argument — the library forbids it. `jev` (headless, default) and `jev-chrome`
+(attached) are separate registrations. The attached tools are named `..._as_me` so an
+agent's choice is legible in the tool call itself, not only in its description.
+
+## D4 — `BU_NAME` follows the browser, not the process
+
+A constant name breaks on our own two-server design: two processes, one socket path,
+`_ipc.serve` unlinks before binding, last writer wins — and those processes point at
+**different browsers**. Per-pid naming is correct but orphans a daemon on every restart.
+
+So: headless is `jev-h<port>` (no two servers share a port), attached is `jev-chrome`
+(one user Chrome, so one shared daemon, and a restart reuses it).
+
+## D5 — Agent construction is serialized even though runs are parallel
+
+`ensure_daemon()` skips its own spawn lock exactly when `BU_CDP_URL` is set
+(`admin.py:585-589`) — precisely our headless mode. Concurrent cold starts would race
+several daemons onto one socket and orphan the losers' live CDP connections.
+
+Parallelism across sessions is capped at 3 and measured worthwhile (~2.2–2.7×: the daemon
+is asyncio with no hot-path lock, and ~66% of a tick is overlappable network wait).
+
+## D6 — Ambiguous mutations are reported, never retried
+
+`_ipc.py:96-106` returns `{}` when the daemon dies mid-request, and `Input.dispatch*`
+legitimately returns `{}` — so a dead daemon is byte-identical to a successful click.
+A daemon dying between `mousePressed` and `mouseReleased` leaves a confident history entry
+for a click that never completed.
+
+Rule: if the daemon does not answer, or the library says it does not know
+(*"Dropdown execution was not confirmed"*), or a history row is stuck at
+`page_changed: None`, the outcome is `ambiguous_mutation`, the session is dropped, and
+nothing is retried. Only model failures retry — they carry *"no action executed"*, which
+is literally true.
+
+## D7 — We do not bundle browser-harness's 23 MCP tools
+
+`mcp_server.py` ships in the base wheel and could be imported for free, adding 23 browser
+tools to this server. jev's README:105 promises *"Model output never becomes selectors,
+coordinates, shell commands, or executable JavaScript"* — and `browser_js`, `browser_cdp`,
+`browser_fill`, `browser_wait_for_element`, `browser_upload_file` and `browser_click`
+each break exactly that. Not bundling is the default: we simply never import it and never
+add the `browser-harness[mcp]` extra. Anyone wanting both registers both.
+
+## D8 — `http`/`https` only
+
+`url="file:///…/.ssh/id_rsa"` would return the file's contents in `page_text_untrusted`.
+A Claude Code caller already has `Read`, but this is a published server and some clients
+have only MCP tools — for those we would be *adding* filesystem read. Loopback stays
+allowed: driving a local dev server is a real use case. `JEV_MCP_ALLOW_SCHEMES` widens it.
+
+## D9 — Sessions, and `goal` optional on continuation
+
+A 50-second run that times out with 9 actions of progress must be resumable. But every
+continuation calls `retask()`, which clears history — so resending the same goal would
+wipe the work being resumed. `goal` is therefore optional: `{session_id}` alone resumes,
+`{session_id, goal}` redirects.
+
+## D10 — The state contract asserts all 13 keys, not the 9 we write
+
+Decided-by: advisor
+
+`Agent.state` has 13 keys (`agent.py:27-41`); `retask()` writes 9. Asserting only the 9
+would miss the drift that actually breaks retasking: an **added** key, e.g. a new counter
+beside `decisions`, which would gate task two at `agent.py:75` while a 9-key check saw
+nothing wrong. `self.pending_text` is an instance attribute outside `state`
+(`agent.py:18`) and is cleared explicitly, since no key-set assertion can cover it.
+
+## D11 — Dependency pinned by full 40-char sha over https
+
+Decided-by: advisor
+
+`git+https://github.com/browser-use/jev-ultrafast@1231850a0bf1a0c0341fe408ef1668dbbfdfac46`
+
+The local clone's remote is the **ssh** form (`git@github.com:…`); copying that into the
+dependency would make the package uninstallable for anyone without a GitHub key. No tags
+exist, so a sha is the only immutable handle, and the full 40 chars rather than the short
+form. HEAD is pinned even though that commit is docs-only: it is the tree tested against.
+`browser-harness==0.1.13` arrives transitively and is deliberately not re-pinned.
+
+This also means the package cannot go to PyPI — PyPI rejects direct URL dependencies, and
+jev-ultrafast is unpublished (404). `allow-direct-references` is set for the local build.
+
+## D12 — Local repo only; the remote is the user's to create
+
+Decided-by: advisor
+
+Nothing about the remote unblocks a line of the build, and the org should not hold the
+name before the thing exists. When checks are green the push is one command:
 `gh repo create OpenSWE/jev-browser-use-mcp --public --source=. --push`.
-
-Reason: nothing about the remote unblocks a single line of the build, and the
-org should not hold the name before the thing exists. The committed history is
-what ships, so commits are made properly as the work goes, not squashed at the
-end.
-
-Decided-by: advisor
-
----
-
-## 2026-09-20 — Dependency pinned to a full 40-char sha over https
-
-```
-jev-ultrafast @ git+https://github.com/browser-use/jev-ultrafast@1231850a0bf1a0c0341fe408ef1668dbbfdfac46
-```
-
-- `jev-ultrafast` is **not on PyPI** (404) and the repo has **no tags**, so a
-  sha is the only immutable handle. All 40 characters, not the short form.
-- **https, never ssh.** The local clone's remote is
-  `git@github.com:browser-use/jev-ultrafast.git`; copying that form into the
-  dependency would make the package uninstallable for anyone without a GitHub
-  key. The upstream repo is public and MIT, so https resolves for everyone.
-- HEAD is pinned even though that commit is docs-only: it is the tree in the
-  `.venv` this design was read from and the one it is tested against.
-- `browser-harness==0.1.13` arrives transitively. It is **not** re-pinned here,
-  and the `browser-harness[mcp]` extra is never added.
-
-Decided-by: advisor
-
----
-
-## 2026-09-20 — Assert all 13 state keys, not the 9 that get mutated
-
-`Agent.state` has **13** keys (`agent.py:27-41`): `browser`, `goal`, `page`,
-`decision`, `history`, `status`, `plan`, `plan_index`, `decisions`,
-`text_calls`, `elapsed_ms`, `started_at`, `record`. Retasking mutates 9 of
-them — `browser` and `record` stay, and `page`/`decision` self-heal inside
-`predict` at `agent.py:70-76`.
-
-The contract assertion nonetheless compares the **full 13-key set**. The drift
-that silently breaks retasking is an *added* key — say a new counter beside
-`decisions` — which would gate task two at `agent.py:75` while a 9-key check
-saw nothing wrong.
-
-`self.pending_text` is an instance attribute **outside** `state`
-(`agent.py:18`) and must be cleared too; a dict key-set assertion can never
-cover it.
-
-The two gates that make retasking necessary at all, and so what the assertion
-protects: `status in {"done","blocked"}` raises at `agent.py:73`, and
-`len(decisions) >= MAX_STEPS * 2` raises at `agent.py:75`.
-
-Decided-by: advisor
-
----
-
-## 2026-09-20 — Not bundling browser-harness's MCP tools is the default, and the reason is broader than two tools
-
-`mcp_server.py` ships as a single top-level module in the base
-`browser-harness` wheel. Not bundling therefore *excludes* nothing — it simply
-never imports that module and never adds the `[mcp]` extra.
-
-The reason is wider than first framed. jev's `README.md:105` states: *"Model
-output never becomes selectors, coordinates, shell commands, or executable
-JavaScript."* Against that promise it is not only `browser_js` and
-`browser_cdp` that break it — `browser_fill`, `browser_wait_for_element` and
-`browser_upload_file` each take a model-authored **selector**, and
-`browser_click` takes model-authored **coordinates**. Most of the 23 tools
-break the promise, not two.
-
-Anyone wanting raw browser control registers `browser-harness-mcp` separately
-and deliberately.
-
-Decided-by: advisor
-
----
-
-## 2026-09-20 — Offline tests need no API keys, but `TYPESAFE_API_KEY` raises a bare `KeyError`
-
-Both keys are read lazily inside functions, not at import: `TYPESAFE_API_KEY`
-at `model.py:119`, `TEXT_MODEL_API_KEY` at `model.py:161`. Any test that never
-reaches `choose()` or `field_text()` needs no key and makes no network call.
-
-But `model.py:119` is a bare `os.environ[...]` lookup, so a missing key
-surfaces as a raw `KeyError` — caught at the tool boundary and returned as a
-clean error. `model.py:163` already does this properly for the other key.
-
-Decided-by: advisor
