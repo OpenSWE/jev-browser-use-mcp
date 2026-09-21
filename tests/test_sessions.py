@@ -335,6 +335,18 @@ def test_model_failure_is_retried_and_can_succeed(runner, monkeypatch, capsys):
     assert "model failure 1/2" in err and "HTTP 500" in err
 
 
+def test_unknown_browser_mode_is_rejected(monkeypatch):
+    """Silently serving headless on a typo is worse than refusing to start."""
+    for name in server.REQUIRED_ENV:
+        monkeypatch.setenv(name, "x")
+    monkeypatch.setenv("JEV_MCP_BROWSER", "chrome")
+    with pytest.raises(SystemExit, match="not a mode"):
+        server.check_env()
+    for mode in ("headless", "attached", "ATTACHED"):
+        monkeypatch.setenv("JEV_MCP_BROWSER", mode)
+        server.check_env()
+
+
 # ---- MCP wiring ----------------------------------------------------------
 
 

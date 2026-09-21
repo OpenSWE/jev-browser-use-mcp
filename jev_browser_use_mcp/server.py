@@ -74,6 +74,12 @@ def check_url(url: str) -> None:
 
 
 def check_env() -> None:
+    # An unrecognised value used to fall through to headless, which hides a typo behind a
+    # working server whose tools are named differently than the operator expects. The
+    # README shipped "chrome" here for one commit, and nothing complained.
+    mode = os.environ.get("JEV_MCP_BROWSER", "headless").lower()
+    if mode not in {"headless", "attached"}:
+        raise SystemExit(f"jev-browser-use-mcp: JEV_MCP_BROWSER={mode!r} is not a mode; use 'headless' or 'attached'.")
     missing = [name for name in REQUIRED_ENV if not os.environ.get(name)]
     if missing:
         raise SystemExit(

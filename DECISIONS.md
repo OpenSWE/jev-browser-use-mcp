@@ -160,3 +160,16 @@ Decided-by: advisor
 
 The repo name carries `browser-use` and the org is public, so nobody should have to guess
 whether this is official. One line under the title, not a footnote.
+
+## D16 — Unrecognised JEV_MCP_BROWSER refuses to start
+
+The README shipped `JEV_MCP_BROWSER=chrome` in both the prose and the JSON snippet, but
+`attached_mode()` (`server.py:59`) compares against `"attached"`. Anyone following it got
+**headless mode silently**, serving `run_browser_task` while the docs promised
+`run_browser_task_as_me`. Nothing complained, because an unrecognised value fell through to
+the `"headless"` default.
+
+A typo that yields a working server in the wrong mode is worse than one that fails, so
+`check_env()` now rejects anything outside `{headless, attached}`. The README is corrected.
+The alternative — accepting `chrome` as an alias — was rejected: it hides the mismatch
+instead of naming it, and invites the next near-miss (`chrom`, `real`) to fall through too.

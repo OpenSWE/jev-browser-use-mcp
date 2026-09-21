@@ -74,11 +74,11 @@ different model against a different endpoint.
 
 ### Attached — acts as you
 
-Register this one only if you want it. Set `JEV_MCP_BROWSER=chrome`; its tools
+Register this one only if you want it. Set `JEV_MCP_BROWSER=attached`; its tools
 are named `run_browser_task_as_me` and `close_browser_session_as_me`.
 
 ```json
-{ "jev-chrome": { "command": "uvx", "args": ["…"], "env": { "JEV_MCP_BROWSER": "chrome", "…": "…" } } }
+{ "jev-chrome": { "command": "uvx", "args": ["…"], "env": { "JEV_MCP_BROWSER": "attached", "…": "…" } } }
 ```
 
 It attaches to your running Chrome and can act in **every session you are
