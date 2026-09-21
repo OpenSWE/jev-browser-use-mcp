@@ -19,7 +19,11 @@ def main() -> int:
     print(f"mode: {'attached' if RUNNER.attached else 'headless'}", file=sys.stderr)
 
     body = RUNNER.run_task("https://en.wikipedia.org/wiki/Main_Page", "search for Ada Lovelace", None, 50)
-    print(json.dumps(body, indent=2)[:1500])
+    # Diagnosis first: the page text is long and would otherwise bury the reason.
+    head = {k: body.get(k) for k in ("outcome", "error", "warning", "steps", "setup_ms", "task_ms", "url")}
+    print(json.dumps(head, indent=2))
+    print("\nactions:", json.dumps(body.get("actions"), indent=2)[:800])
+    print("\npage_text_untrusted[:300]:", repr(body.get("page_text_untrusted", "")[:300]))
 
     if body["outcome"] not in {"agent_claims_done", "deadline_exceeded"}:
         print(f"\nFAIL: {body['outcome']}", file=sys.stderr)

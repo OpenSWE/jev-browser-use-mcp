@@ -428,3 +428,38 @@ def test_headless_leftovers_are_still_fully_reclaimed(orphan):
     assert chrome.sweep_orphans() == 2, "their Chrome is dead, so their tabs are too"
     assert not headless.exists() and not corrupt.exists(), "a corrupt chrome.pid is still headless garbage"
     assert orphan.exists(), "the attached record is untouched"
+
+
+def test_headless_registry_writes_nothing(tmp_path, monkeypatch):
+    """Writing it in headless recreates CACHE/<pid>/ after close() rmtree'd the profile.
+
+    That leaves a dir with a tab record and no chrome.pid -- the exact shape
+    sweep_orphans() refuses to reclaim, so it accumulates forever.
+    """
+    monkeypatch.setattr(sessions, "CACHE", tmp_path)
+    registry = sessions.TabRegistry()
+    registry.path = tmp_path / str(9999) / "targets.json"
+    registry.enabled = False
+    registry.add("T1")
+    assert not registry.path.exists() and not registry.path.parent.exists()
+
+    registry.enabled = True
+    registry.add("T2")
+    assert registry.path.exists(), "attached mode must still record"
+
+
+@pytest.mark.parametrize(
+    "name, stopped",
+    [("jev-h60281", True), ("jev-chrome", False), ("default", False), ("", False)],
+)
+def test_only_our_own_headless_daemon_is_stopped(monkeypatch, name, stopped):
+    """jev-chrome is shared with the user's other browser-harness consumers."""
+    calls = []
+    monkeypatch.setenv("BU_NAME", name)
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "browser_harness.admin",
+        type("M", (), {"restart_daemon": staticmethod(lambda n: calls.append(n))}),
+    )
+    server.stop_own_daemon()
+    assert bool(calls) is stopped

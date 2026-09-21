@@ -114,21 +114,25 @@ def close_quietly(agent) -> None:
 class TabRegistry:
     """Records the tabs we create so a hard-killed server's tabs can still be reaped.
 
-    Written in both modes, but only ever READ in attached mode: there the browser
-    outlives us and our background tabs would otherwise accumulate invisibly in the
-    user's Chrome forever. Headless mode kills the whole browser, which takes its
-    tabs with it, and the file is reclaimed along with the profile directory.
+    Attached mode only (`enabled`), because only there does the browser outlive us
+    and our background tabs accumulate invisibly in the user's Chrome.
 
-    Keeping the write unconditional is what lets chrome.sweep_orphans() tell the two
-    apart by the presence of chrome.pid alone, with no mode branch.
+    Writing it in headless mode is not merely pointless, it litters: _flush()
+    recreates CACHE/<pid>/ after close() has already rmtree'd the profile, leaving a
+    directory holding a tab record and no chrome.pid -- exactly the shape
+    chrome.sweep_orphans() protects from reclamation, so it would accumulate forever.
+    Found by the first live run; no fake could produce it.
     """
 
     def __init__(self) -> None:
         self.path = CACHE / str(os.getpid()) / "targets.json"
+        self.enabled = True  # Runner turns this off in headless mode.
         self._ids: set[str] = set()
         self._lock = threading.Lock()
 
     def _flush(self) -> None:
+        if not self.enabled:
+            return
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.path.write_text(json.dumps(sorted(self._ids)))

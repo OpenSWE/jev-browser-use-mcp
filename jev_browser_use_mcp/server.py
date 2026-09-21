@@ -106,7 +106,9 @@ class Runner:
     def __init__(self) -> None:
         self.attached = attached_mode()
         self.headless: chrome.HeadlessChrome | None = None
-        self.store = SessionStore(TabRegistry())
+        tabs = TabRegistry()
+        tabs.enabled = self.attached  # Headless tabs die with their Chrome; writing the record only litters.
+        self.store = SessionStore(tabs)
         self.browser_ready = threading.Lock()
         self._booted = False
         self._profiles = 0
@@ -311,7 +313,26 @@ class Runner:
     def shutdown(self) -> None:
         self.store.close_all()
         if self.headless:
+            stop_own_daemon()  # Before killing Chrome: the tabs are already closed.
             self.headless.close()
+
+
+def stop_own_daemon() -> None:
+    """Stop the browser-harness daemon we spawned for our own headless Chrome.
+
+    Headless only, and guarded on the jev-h prefix: in attached mode the daemon is
+    shared with the user's other browser-harness consumers and must be left alone.
+    Without this a daemon leaks per run -- four were alive after four smoke runs.
+    """
+    name = os.environ.get("BU_NAME", "")
+    if not name.startswith("jev-h"):
+        return
+    try:
+        from browser_harness.admin import restart_daemon
+
+        restart_daemon(name)  # "Best-effort daemon shutdown + socket/pid cleanup."
+    except Exception:
+        pass
 
 
 RUNNER = Runner()
