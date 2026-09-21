@@ -14,6 +14,8 @@ import os
 import sys
 import threading
 import time
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as pkg_version
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -356,11 +358,20 @@ _AS_ME = (
 )
 
 
+def package_version() -> str:
+    """Clients show this in serverInfo. A missing version is cosmetic; crashing over it is not."""
+    try:
+        return pkg_version("jev-browser-use-mcp")
+    except PackageNotFoundError:
+        return "0+unknown"  # Running from a source tree that was never installed.
+
+
 def build_server() -> MCPServer:
     attached = attached_mode()
     suffix = "_as_me" if attached else ""
     server = MCPServer(
         name="jev-chrome" if attached else "jev",
+        version=package_version(),
         instructions="Drive a browser toward a natural-language goal using Jev Ultrafast.",
     )
 
