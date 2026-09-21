@@ -55,8 +55,11 @@ def main() -> int:
     send(method="notifications/initialized", params={})
     send(id=2, method="tools/list", params={})
     tools = json.loads(proc.stdout.readline())["result"]["tools"]
-    proc.stdin.close()
-    proc.terminate()
+    proc.stdin.close()  # EOF is how a client stops a stdio server; signals are the fallback.
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
 
     print(f"serverInfo: {info}")
     for tool in tools:

@@ -440,7 +440,11 @@ def main() -> None:
         try:
             import signal
 
-            signal.signal(getattr(signal, sig), lambda *_: (RUNNER.shutdown(), sys.exit(0)))
+            # os._exit, not sys.exit: SystemExit raised inside a signal handler unwinds
+            # through the asyncio loop and prints a traceback, so every clean stop looks
+            # like a crash in the client's log. shutdown() has already run by then, and
+            # skipping atexit here avoids running it a second time.
+            signal.signal(getattr(signal, sig), lambda *_: (RUNNER.shutdown(), os._exit(0)))
         except (ValueError, AttributeError, OSError):
             pass
     build_server().run(transport="stdio")

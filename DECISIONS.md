@@ -173,3 +173,16 @@ A typo that yields a working server in the wrong mode is worse than one that fai
 `check_env()` now rejects anything outside `{headless, attached}`. The README is corrected.
 The alternative — accepting `chrome` as an alias — was rejected: it hides the mismatch
 instead of naming it, and invites the next near-miss (`chrom`, `real`) to fall through too.
+
+## D17 — Signal handlers use os._exit, not sys.exit
+
+Found by `scripts/handshake.py`, which stops the server the way a client does. `sys.exit(0)`
+inside a signal handler raises `SystemExit` that unwinds through the asyncio loop, so a
+normal SIGTERM printed a full traceback: **every clean shutdown looked like a crash** in the
+client's log. Cleanup was never at risk — `RUNNER.shutdown()` evaluates first in that tuple —
+so this was cosmetic, but it is the kind of cosmetic that gets a working server reported as
+broken.
+
+`os._exit(0)` skips `atexit`, which is the point: `shutdown()` has already run explicitly in
+the same handler, so the atexit copy would only run it twice. Verified — SIGTERM now exits 0
+with empty stderr.
