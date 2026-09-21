@@ -120,3 +120,43 @@ Decided-by: advisor
 Nothing about the remote unblocks a line of the build, and the org should not hold the
 name before the thing exists. When checks are green the push is one command:
 `gh repo create OpenSWE/jev-browser-use-mcp --public --source=. --push`.
+
+## D13 — The one uncharacterised smoke failure does not block the push
+
+Decided-by: advisor
+
+Five live headless runs: four passed, one returned `outcome: "error"` whose cause was lost
+because `scripts/smoke.py` truncated the envelope at 1500 chars. **That truncation was the
+defect this episode exposed, and it is fixed** — the script now prints the diagnosis keys
+before the page text.
+
+The advisor first read the failure as a cold-start race and asked for five clean runs,
+believing runs 2–5 had inherited run 1's daemon. They had not: `server.py:137` derives
+`BU_NAME` from `_free_port()` on every start, so each run spawns its own daemon — and the
+four distinct leaked names (`jev-h60281/60427/60612/60707`) are the proof. All five runs
+were daemon-cold.
+
+The structural argument retires the hypothesis outright, and is stronger than the timing
+one: a cold-spawn race returns `setup_failed` at `server.py:285`, never `"error"`. Only two
+lines in `classify()` produce `"error"` — `:207` (model retries exhausted) and `:209`
+(nothing typed / missing `TEXT_MODEL_API_KEY`) — and **both are mutation-free**, so the
+never-retry invariant was never reached whichever fired. A transient provider fault
+surfacing as an honest outcome string is the tool working.
+
+## D14 — Offline debug-emit test instead of more paid runs
+
+Decided-by: advisor
+
+One live run at ~20% recurrence is a weak reproduction test. What it would actually confirm
+— that the `JEV_MCP_DEBUG=1` path emits — is testable offline against the existing fake
+Agent, at zero cost and as a permanent check rather than one observation. So
+`test_model_failure_is_retried_and_can_succeed` now asserts `model failure 1/2` and the
+underlying error reach stderr. Verified to fail when the `debug()` call at `server.py:197`
+is removed.
+
+## D15 — README states the project is unaffiliated
+
+Decided-by: advisor
+
+The repo name carries `browser-use` and the org is public, so nobody should have to guess
+whether this is official. One line under the title, not a footnote.

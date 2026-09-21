@@ -2,6 +2,9 @@
 
 **A stdio MCP server that gives any coding agent [Jev Ultrafast](https://github.com/browser-use/jev-ultrafast)'s browser agent.**
 
+*An unaffiliated third-party wrapper. Not a browser-use project — it depends on
+their package, and they neither publish nor endorse it.*
+
 Hand it one natural-language goal. It drives a real browser and returns **evidence** — not a verdict.
 
 ```

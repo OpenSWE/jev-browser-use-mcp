@@ -312,7 +312,7 @@ def test_model_failure_retries_then_gives_up(runner, monkeypatch):
     assert outcome_for(runner, error, monkeypatch) == "error"
 
 
-def test_model_failure_is_retried_and_can_succeed(runner, monkeypatch):
+def test_model_failure_is_retried_and_can_succeed(runner, monkeypatch, capsys):
     agent = FakeAgent(ticks=2)
     calls = {"n": 0}
     original = agent.command
@@ -324,9 +324,15 @@ def test_model_failure_is_retried_and_can_succeed(runner, monkeypatch):
         return original(name)
 
     agent.command = flaky
+    # DEBUG is read at import, so patch the module attribute the call site reads.
+    monkeypatch.setattr(server, "DEBUG", True)
     monkeypatch.setattr(runner, "build_session", lambda url, goal: runner.store.add(agent, goal))
     body = runner.run_task("https://e.test", "a", None, 50)
     assert body["outcome"] == "agent_claims_done" and calls["n"] == 3
+    # A silent retry looks exactly like a slow run. This line is the only thing that
+    # tells the two apart in the field, so it is worth a test of its own.
+    err = capsys.readouterr().err
+    assert "model failure 1/2" in err and "HTTP 500" in err
 
 
 # ---- MCP wiring ----------------------------------------------------------
