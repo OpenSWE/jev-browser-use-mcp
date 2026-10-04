@@ -22,6 +22,12 @@ from pathlib import Path
 
 CACHE = Path.home() / ".cache" / "jev-browser-use-mcp"
 
+# How long an attached-mode tab record is worth keeping. The tabs it names live in the
+# user's own Chrome, so they cannot outlive it: once that process restarts, the record
+# points at windows nobody can close and only the directory survives. One per attached
+# run, so without a cap they accumulate forever.
+ORPHAN_TAB_TTL = 7 * 24 * 3600
+
 # Order matters: the two env vars are the convention browser-harness already honors.
 _MAC = ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"]
 _LINUX = ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"]
@@ -107,9 +113,13 @@ def sweep_orphans() -> int:
             # that can still close those tabs in the user's real Chrome. Deleting it
             # here would undo sweep_orphan_tabs()'s deliberate decision to keep it
             # after a failed close. It removes the file itself once every close lands.
-            # ponytail: these dirs accumulate if the daemon never comes back -- cap by
-            # age if that ever shows up.
-            continue
+            try:
+                age = time.time() - (entry / "targets.json").stat().st_mtime
+            except OSError:
+                age = 0.0  # Vanished mid-sweep: keep it, the next start sees the truth.
+            if age < ORPHAN_TAB_TTL:
+                continue
+            # Past the cap the record is only litter, so fall through and reclaim it.
         shutil.rmtree(entry, ignore_errors=True)
         removed += 1
     return removed

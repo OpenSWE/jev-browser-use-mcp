@@ -186,3 +186,20 @@ broken.
 `os._exit(0)` skips `atexit`, which is the point: `shutdown()` has already run explicitly in
 the same handler, so the atexit copy would only run it twice. Verified — SIGTERM now exits 0
 with empty stderr.
+
+## D18 — Attached tab records expire after 7 days
+
+The `ponytail:` note on that gate said to cap by age "if that ever shows up". It showed up:
+two live attached runs through a real MCP `tools/call` left `~/.cache/jev-browser-use-mcp/`
+dirs behind, one per run, and nothing else reclaims them. The record is kept on purpose —
+it is the only thing that can still close tabs stranded in the user's real Chrome — but that
+value is not permanent.
+
+7 days, because the tabs cannot outlive the Chrome that holds them. Once that process
+restarts the record points at windows nobody can close, and only the directory survives.
+A day would be tighter but risks discarding a record whose Chrome is still up; the machine
+this was measured on had Chrome running 14 days, so short caps are not safe here.
+
+Keyed on `targets.json`'s mtime, not the dir's: the dir's mtime moves when anything inside
+changes, the record's does not. A `stat()` that races a concurrent delete is treated as
+fresh rather than stale — never delete on uncertainty; the next start sees the truth.

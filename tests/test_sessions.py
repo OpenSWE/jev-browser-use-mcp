@@ -6,6 +6,7 @@ never reaches them needs neither.
 
 from __future__ import annotations
 
+import os
 import time
 
 import pytest
@@ -446,6 +447,22 @@ def test_headless_leftovers_are_still_fully_reclaimed(orphan):
     assert chrome.sweep_orphans() == 2, "their Chrome is dead, so their tabs are too"
     assert not headless.exists() and not corrupt.exists(), "a corrupt chrome.pid is still headless garbage"
     assert orphan.exists(), "the attached record is untouched"
+
+
+def test_stale_attached_records_are_capped_by_age(orphan):
+    """Kept so a later run can close those tabs -- but not forever.
+
+    One dir per attached run and nothing else reclaims them, so without a cap they
+    accumulate for the life of the machine. The tabs die with the user's Chrome, so
+    past the cap the dir points at windows nobody can close.
+    """
+    assert chrome.sweep_orphans() == 0, "a fresh record is still worth keeping"
+    assert orphan.parent.exists()
+
+    stale = time.time() - chrome.ORPHAN_TAB_TTL - 60
+    os.utime(orphan, (stale, stale))
+    assert chrome.sweep_orphans() == 1, "past the cap it is only litter"
+    assert not orphan.parent.exists()
 
 
 def test_headless_registry_writes_nothing(tmp_path, monkeypatch):
