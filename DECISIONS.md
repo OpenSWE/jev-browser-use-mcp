@@ -220,3 +220,32 @@ A 403 or 404 is left to the harness, which owns the per-connection popup and the
 default-profile toggle — a 200 means neither applies, so `cdp` kind loses nothing `local` had.
 It runs ahead of the boot guard, so a Chrome started after the server is still found.
 D5 holds: Agent construction is serialized in both modes.
+
+## D20 — jev-ultrafast is pinned to an OpenSWE fork carrying upstream PR #10
+
+Upstream `snapshot.js` reads controls with `document.querySelectorAll` and text with a
+TreeWalker over `document.body`; neither enters a shadow root, and the act-time hit test
+(`e.contains(document.elementFromPoint(x,y))`) lands on the host, never the control. A
+web-component site is therefore nearly blank. Measured 2026-10-05 on the Vanguard
+dashboard: 61 chars and 9 controls before, 1707 chars and 164 controls after.
+
+browser-use/jev-ultrafast#10 already fixes this end to end — composed traversal through open
+roots and slots, root-scoped `aria-labelledby`, recursive hit testing, composed events — and
+adds 13 real-browser shadow checks. It was open and mergeable, not merged. Rather than a
+second implementation, `OpenSWE/jev-ultrafast` branch `openswe` is upstream `1231850` plus a
+merge of #10 (all 31 unit tests and 33 browser guard checks pass on the merge), and this
+package pins that sha. Pinning the PR author's fork was rejected: it can be deleted or
+force-pushed out from under ten hosts. Return to an upstream sha once #10 merges.
+
+## D21 — A BLOCKED before any action waits for the page to change
+
+jev observes once `readyState` is `complete`, but a single-page app renders after that, so
+the first snapshot can be a skeleton ("Loading...") and the model answers BLOCKED in ~200ms
+with zero actions. Measured on Vanguard: complete at 2.1s, content arriving until 5.4s, with
+a 2.1s gap with no DOM change between stages — so no quiet-window settle would have caught it.
+
+A BLOCKED with an empty history executed nothing, the same mutation-free property that makes
+model failures retryable (D6 still holds: nothing that may have acted is retried). `drive()`
+polls `fresh()` against the decided-on snapshot for up to 5s, with no model calls, and only if
+the page changes does it reset the status to ready, so the next tick re-observes and decides
+again. A static page that is genuinely blocked costs up to 5s of waiting and no extra calls.

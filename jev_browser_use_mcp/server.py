@@ -33,6 +33,13 @@ TEXT_CAP = 2000
 # keeps being retried and the task deadline is what ultimately bounds it. That is the
 # intent -- a transient 500 mid-task should not abort work already done.
 MODEL_RETRIES = 2
+# A BLOCKED before any action is mutation-free, and on a single-page app it usually means the
+# first snapshot beat the render: readyState is "complete" before the framework draws. So the
+# page is watched (no model calls) and the decision is retaken only if it changes. A fixed quiet
+# window cannot replace this -- Vanguard sits 2.1s unchanged between its two loading stages.
+# ponytail: a genuinely blocked static page now costs up to EARLY_BLOCK_SETTLE_S of waiting.
+EARLY_BLOCK_SETTLE_S = 5.0
+SETTLE_POLL_S = 0.25
 
 # Config the user must set: the last two silently fall back to DeepSeek, which
 # would quietly run a different model against a different endpoint.
@@ -216,11 +223,19 @@ class Runner:
         """Run ticks until terminal, deadline, or cancellation. Returns an outcome."""
         agent = session.agent
         model_failures = 0
+        settle_until = None
         while True:
             if stop.is_set():
                 return "cancelled"
             if time.monotonic() > deadline:
                 return "deadline_exceeded"
+            if agent.state["status"] == "blocked" and not agent.state["history"]:
+                settle_until = settle_until or min(deadline, time.monotonic() + EARLY_BLOCK_SETTLE_S)
+                if self.page_changed(agent, settle_until, stop):
+                    agent.state["status"] = "ready"  # Nothing executed; the next tick re-observes.
+                    continue
+                if stop.is_set():
+                    return "cancelled"
             if agent.state["status"] in {"done", "blocked"}:
                 break
             before = len(agent.state["history"])
@@ -235,6 +250,18 @@ class Runner:
                     continue
                 return outcome
         return "agent_claims_done" if agent.state["status"] == "done" else "blocked"
+
+    def page_changed(self, agent, until: float, stop: threading.Event) -> bool:
+        """Poll the observed page until it differs from the decided-on snapshot. No model calls."""
+        page = agent.state["page"]
+        while time.monotonic() < until and not stop.is_set():
+            time.sleep(SETTLE_POLL_S)
+            try:
+                if not agent.browser.fresh(page):
+                    return True
+            except Exception:
+                return True  # Mid-navigation is a change; the next tick's observe settles or classifies it.
+        return False
 
     def classify(self, error: Exception, agent, history_before: int, model_failures: int) -> str:
         """Map an escaped exception to an outcome. Conservative about mutations by design."""

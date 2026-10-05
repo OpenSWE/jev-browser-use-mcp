@@ -286,6 +286,48 @@ def test_blocked_stays_resumable_for_a_new_goal(runner, monkeypatch):
     assert body["resumable"] is True and runner.store.get(body["session_id"]) is not None
 
 
+class LoadingPage:
+    """fresh() holds for `static` polls, then reports that the page changed."""
+
+    def __init__(self, static):
+        self.static = static
+
+    def fresh(self, page):
+        self.static -= 1
+        return self.static >= 0
+
+
+class EarlyBlocker(FakeAgent):
+    """Decides BLOCKED without acting for the first `blocks` ticks, then DONE."""
+
+    def __init__(self, blocks, static):
+        super().__init__(history=[])
+        self.browser = LoadingPage(static)
+        self.blocks, self.decisions = blocks, 0
+
+    def command(self, name):
+        self.decisions += 1
+        self.state["status"] = "blocked" if self.decisions <= self.blocks else "done"
+        return self.state
+
+
+def test_early_block_decides_again_once_the_page_renders(runner, monkeypatch):
+    monkeypatch.setattr(server, "SETTLE_POLL_S", 0)
+    agent = EarlyBlocker(blocks=1, static=3)
+    monkeypatch.setattr(runner, "build_session", lambda url, goal: runner.store.add(agent, goal))
+    assert runner.run_task("https://e.test", "a", None, 50)["outcome"] == "agent_claims_done"
+    assert agent.decisions == 2
+
+
+def test_early_block_on_a_static_page_spends_no_model_call(runner, monkeypatch):
+    monkeypatch.setattr(server, "SETTLE_POLL_S", 0)
+    monkeypatch.setattr(server, "EARLY_BLOCK_SETTLE_S", 0.05)
+    agent = EarlyBlocker(blocks=1, static=10**9)
+    monkeypatch.setattr(runner, "build_session", lambda url, goal: runner.store.add(agent, goal))
+    assert runner.run_task("https://e.test", "a", None, 50)["outcome"] == "blocked"
+    assert agent.decisions == 1
+
+
 def test_unresumable_outcomes_drop_the_session(runner, monkeypatch):
     agent = FakeAgent(raises=RuntimeError("Dropdown execution was not confirmed; inspect before retrying."))
     monkeypatch.setattr(runner, "build_session", lambda url, goal: runner.store.add(agent, goal))

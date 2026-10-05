@@ -9,7 +9,9 @@ dependencies = [
     # jev-ultrafast is not on PyPI; a sha is the only immutable handle (no tags exist).
     # https, never the ssh remote: an ssh URL makes this package uninstallable without a GitHub key.
     # browser-harness==0.1.13 arrives transitively. Never add the [mcp] extra.
-    "jev-ultrafast @ git+https://github.com/browser-use/jev-ultrafast@1231850a0bf1a0c0341fe408ef1668dbbfdfac46",
+    # OpenSWE fork = upstream 1231850 + browser-use/jev-ultrafast#10 (shadow DOM). Back to
+    # upstream once #10 merges; see DECISIONS.md D20.
+    "jev-ultrafast @ git+https://github.com/OpenSWE/jev-ultrafast@5f504932d37faed552653952ed6be7889ea2a317",
     "mcp>=2.1,<3",
 ]
 
