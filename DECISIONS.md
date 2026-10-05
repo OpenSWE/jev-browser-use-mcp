@@ -212,7 +212,7 @@ same dirs) raises `chrome-not-running` **before** its own 9222/9223 fallback pro
 A Chrome launched with `--remote-debugging-port=9222` and a dedicated `--user-data-dir` —
 the only way to get the flag past Chrome 136+, and what the `chrome-cdp-setup` Dock launcher
 does — was therefore never found, with an error that names the wrong cause. Measured
-2026-10-05 on mac-mini-m2: Chrome up, `/json/version` answering, every call `setup_failed`.
+2026-10-05 on mac-mini-m6: Chrome up, `/json/version` answering, every call `setup_failed`.
 
 `pin_debug_port()` probes the same two ports first and, on a 200 carrying
 `webSocketDebuggerUrl`, sets `BU_CDP_URL`. An explicit `BU_CDP_URL`/`BU_CDP_WS` always wins.
