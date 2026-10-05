@@ -431,6 +431,14 @@ def test_sweep_keeps_the_record_across_the_whole_startup_path(orphan):
     assert sessions.sweep_orphan_tabs(lambda *a, **k: {}) == 2, "a later run must be able to retry"
 
 
+def test_chrome_exit_reports_the_exit_code_not_an_attributeerror(tmp_path, monkeypatch):
+    """close() nulls self.proc, so reading returncode after it loses the whole diagnosis."""
+    monkeypatch.setattr(chrome, "find_chrome", lambda: "/usr/bin/false")
+    monkeypatch.setattr(chrome, "CACHE", tmp_path)
+    with pytest.raises(RuntimeError, match=r"exited immediately \(code \d+\)"):
+        chrome.HeadlessChrome().start(timeout_s=5.0)
+
+
 def test_headless_leftovers_are_still_fully_reclaimed(orphan):
     """The gate keys on chrome.pid, not on mode -- a headless dir must not leak a profile."""
     headless = orphan.parent.parent / "88888"

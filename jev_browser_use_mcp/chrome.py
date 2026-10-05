@@ -160,8 +160,11 @@ class HeadlessChrome:
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             if self.proc.poll() is not None:
+                # Read the code BEFORE close(): it nulls self.proc, and losing the exit
+                # code here is what turns a real diagnosis into a bare AttributeError.
+                code = self.proc.returncode
                 self.close()
-                raise RuntimeError(f"Chrome exited immediately (code {self.proc.returncode}); tried: {' '.join(argv)}")
+                raise RuntimeError(f"Chrome exited immediately (code {code}); tried: {' '.join(argv)}")
             try:
                 with urllib.request.urlopen(f"{url}/json/version", timeout=1) as response:
                     json.load(response)
