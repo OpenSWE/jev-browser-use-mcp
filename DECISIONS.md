@@ -203,3 +203,20 @@ this was measured on had Chrome running 14 days, so short caps are not safe here
 Keyed on `targets.json`'s mtime, not the dir's: the dir's mtime moves when anything inside
 changes, the record's does not. A `stat()` that races a concurrent delete is treated as
 fresh rather than stale — never delete on uncertainty; the next start sees the truth.
+
+## D19 — Attached mode pins a Chrome already serving CDP on 9222/9223
+
+`browser_harness` finds an attached Chrome only through `DevToolsActivePort` in the default
+profile dirs, and its liveness check (`supported_browser_running()`, SingletonLock in those
+same dirs) raises `chrome-not-running` **before** its own 9222/9223 fallback probe is reached.
+A Chrome launched with `--remote-debugging-port=9222` and a dedicated `--user-data-dir` —
+the only way to get the flag past Chrome 136+, and what the `chrome-cdp-setup` Dock launcher
+does — was therefore never found, with an error that names the wrong cause. Measured
+2026-10-05 on mac-mini-m2: Chrome up, `/json/version` answering, every call `setup_failed`.
+
+`pin_debug_port()` probes the same two ports first and, on a 200 carrying
+`webSocketDebuggerUrl`, sets `BU_CDP_URL`. An explicit `BU_CDP_URL`/`BU_CDP_WS` always wins.
+A 403 or 404 is left to the harness, which owns the per-connection popup and the
+default-profile toggle — a 200 means neither applies, so `cdp` kind loses nothing `local` had.
+It runs ahead of the boot guard, so a Chrome started after the server is still found.
+D5 holds: Agent construction is serialized in both modes.

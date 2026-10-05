@@ -6,6 +6,7 @@ never reaches them needs neither.
 
 from __future__ import annotations
 
+import io
 import os
 import time
 
@@ -134,6 +135,50 @@ def test_close_all_is_idempotent():
     store.close_all()
     store.close_all()
     assert len(store) == 0
+
+
+# ---- attached Chrome discovery -------------------------------------------
+
+
+def fake_devtools(monkeypatch, *open_ports):
+    """urlopen stand-in: ports in open_ports answer /json/version, the rest refuse."""
+    probed = []
+
+    def urlopen(url, timeout):
+        port = int(url.split(":")[2].split("/")[0])
+        probed.append(port)
+        if port not in open_ports:
+            raise ConnectionRefusedError(61, "refused")
+        return io.BytesIO(b'{"webSocketDebuggerUrl": "ws://127.0.0.1/devtools/browser/x"}')
+
+    monkeypatch.setattr(server.urllib.request, "urlopen", urlopen)
+    return probed
+
+
+@pytest.fixture
+def attached_env(monkeypatch):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("BU_")}
+    env["JEV_MCP_BROWSER"] = "attached"
+    monkeypatch.setattr(os, "environ", env)
+    monkeypatch.setattr(server, "profile_count", lambda: 1)
+    return env
+
+
+def test_attached_finds_a_chrome_started_after_the_server(attached_env, monkeypatch):
+    run = server.Runner()
+    fake_devtools(monkeypatch)
+    run.ensure_browser()
+    assert "BU_CDP_URL" not in attached_env  # Nothing listening: leave discovery to the harness.
+    fake_devtools(monkeypatch, 9223)
+    run.ensure_browser()
+    assert attached_env["BU_CDP_URL"] == "http://127.0.0.1:9223"
+
+
+def test_attached_never_overrides_an_explicit_endpoint(attached_env, monkeypatch):
+    attached_env["BU_CDP_WS"] = "ws://elsewhere"
+    probed = fake_devtools(monkeypatch, 9222)
+    server.Runner().ensure_browser()
+    assert probed == [] and "BU_CDP_URL" not in attached_env
 
 
 # ---- argument validation -------------------------------------------------

@@ -84,6 +84,9 @@ are named `run_browser_task_as_me` and `close_browser_session_as_me`.
 It attaches to your running Chrome and can act in **every session you are
 signed into**. First connection may block on Chrome's *"Allow remote
 debugging?"* sheet, which has no timeout.
+A Chrome already serving CDP on `127.0.0.1:9222`/`9223` (launched with
+`--remote-debugging-port` and its own `--user-data-dir`) is used first and raises no
+sheet; set `BU_CDP_URL` to point anywhere else.
 
 Mode is fixed per process, not per call — `browser_harness.helpers` binds its
 daemon identity at import, so one process cannot serve both.

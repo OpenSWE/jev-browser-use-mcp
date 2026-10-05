@@ -14,6 +14,7 @@ import os
 import sys
 import threading
 import time
+import urllib.request
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 from pathlib import Path
@@ -103,6 +104,32 @@ def profile_count() -> int:
     return len(data.get("profile", {}).get("info_cache", {})) or 1
 
 
+def pin_debug_port() -> None:
+    """Attached mode: point browser_harness at a Chrome already serving CDP on 9222/9223.
+
+    The harness finds an attached Chrome through DevToolsActivePort in the default profile
+    dirs only, and its liveness check raises chrome-not-running *before* its own 9222
+    fallback probe runs. So a Chrome started with --remote-debugging-port and a dedicated
+    --user-data-dir (Chrome 136+ refuses the flag on the default one) was never found.
+    An explicit BU_CDP_URL/BU_CDP_WS wins. A 403/404 falls through to the harness, which
+    owns the per-connection popup and the default-profile toggle.
+    """
+    if os.environ.get("BU_CDP_URL") or os.environ.get("BU_CDP_WS"):
+        return
+    for port in (9222, 9223):
+        url = f"http://127.0.0.1:{port}"
+        try:
+            with urllib.request.urlopen(f"{url}/json/version", timeout=1) as resp:
+                if json.load(resp).get("webSocketDebuggerUrl"):
+                    # ponytail: pinned for the process lifetime; moving to a default-profile
+                    # Chrome later needs a server restart.
+                    os.environ["BU_CDP_URL"] = url
+                    debug(f"attached Chrome found at {url}")
+                    return
+        except (OSError, ValueError):
+            continue
+
+
 def matches(error: Exception, markers) -> bool:
     text = str(error)
     return any(marker in text for marker in markers)
@@ -130,6 +157,8 @@ class Runner:
         during registration would risk the server never appearing at all.
         """
         with self.browser_ready:
+            if self.attached:
+                pin_debug_port()  # Ahead of the boot guard: the user may start Chrome after us.
             if self._booted:
                 return
             if self.attached:
