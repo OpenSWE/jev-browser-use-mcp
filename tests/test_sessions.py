@@ -435,8 +435,11 @@ def test_chrome_exit_reports_the_exit_code_not_an_attributeerror(tmp_path, monke
     """close() nulls self.proc, so reading returncode after it loses the whole diagnosis."""
     monkeypatch.setattr(chrome, "find_chrome", lambda: "/usr/bin/false")
     monkeypatch.setattr(chrome, "CACHE", tmp_path)
-    with pytest.raises(RuntimeError, match=r"exited immediately \(code \d+\)"):
+    with pytest.raises(RuntimeError, match=r"exited immediately \(code \d+\)") as caught:
         chrome.HeadlessChrome().start(timeout_s=5.0)
+    # The same message carries argv, so it doubles as the check that we never
+    # block on the desktop keyring -- the difference between 1s and 26s.
+    assert "--password-store=basic" in str(caught.value)
 
 
 def test_headless_leftovers_are_still_fully_reclaimed(orphan):

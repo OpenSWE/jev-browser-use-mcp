@@ -150,6 +150,9 @@ class HeadlessChrome:
             f"--user-data-dir={self.profile}",
             "--no-first-run",
             "--no-default-browser-check",
+            # A throwaway profile has no passwords, but Chrome still probes the desktop
+            # keyring over dbus and blocks on it: 26s -> 1s on a Linux desktop host.
+            "--password-store=basic",
             *_extra_flags(),
         ]
         # Chrome's own chatter must never reach stdout: that is the MCP transport.
